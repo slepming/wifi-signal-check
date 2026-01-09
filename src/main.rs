@@ -127,13 +127,34 @@ async fn main() -> Result<(), io::Error> {
 async fn create_device<'a>(intf: &[Interface], sock: &mut AsyncSocket) -> Paragraph<'a> {
     let mut text: Vec<Spans> = Vec::with_capacity(intf.len() + 2);
     for interface in intf {
-        if let Some(indx) = interface.name.as_ref() {
-            let bss = sock.get_bss_info(interface.index.unwrap()).await.unwrap();
+        if let Some(indx) = interface.name.as_ref()
+            && let Some(bss) = sock
+                .get_bss_info(interface.index.unwrap())
+                .await
+                .unwrap()
+                .first_mut()
+        {
             let span = Spans::from(vec![Span::styled(
                 String::from_utf8(indx.to_vec()).unwrap(),
-                Style::default().add_modifier(Modifier::BOLD),
+                Style::default().add_modifier(if bss.status.unwrap() == 1 {
+                    Modifier::BOLD
+                } else {
+                    Modifier::DIM
+                }),
             )]);
-            let signal = bss[0].signal.ok_or_else(|| 0).unwrap() / 100;
+
+            let mut signal: i32 = 0;
+            if let Some(sig) = bss.signal {
+                signal = sig / 100;
+            }
+
+            info!(
+                "frequency {} beacon_interval {} seen_ms_ago {}",
+                bss.frequency.unwrap(),
+                bss.beacon_interval.unwrap(),
+                bss.seen_ms_ago.unwrap()
+            );
+
             let signal_span = Spans::from(vec![
                 Span::raw("Connection"),
                 Span::styled(
