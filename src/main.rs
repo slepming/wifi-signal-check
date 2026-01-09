@@ -133,7 +133,7 @@ async fn create_device<'a>(intf: &[Interface], sock: &mut AsyncSocket) -> Paragr
                 String::from_utf8(indx.to_vec()).unwrap(),
                 Style::default().add_modifier(Modifier::BOLD),
             )]);
-            let bss_span = Spans::from(vec![
+            let signal_span = Spans::from(vec![
                 Span::raw("Connection"),
                 Span::styled(
                     format!(" {} ", bss[0].signal.ok_or_else(|| 0).unwrap() / 100),
@@ -141,7 +141,7 @@ async fn create_device<'a>(intf: &[Interface], sock: &mut AsyncSocket) -> Paragr
                 ),
                 Span::styled("dBm", Style::default().add_modifier(Modifier::ITALIC)),
             ]);
-            text.clone_from_slice([span, bss_span].as_ref());
+            text.extend([span, signal_span]);
         }
     }
     Paragraph::new(text).block(Block::default().borders(Borders::ALL))
