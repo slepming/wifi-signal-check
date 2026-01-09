@@ -11,6 +11,7 @@ use crossterm::{
     terminal::{LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use log::info;
+use macaddr::{MacAddr, MacAddr6};
 use neli_wifi::{AsyncSocket, Interface};
 use tui::{
     Frame, Terminal,
@@ -154,6 +155,19 @@ async fn create_device<'a>(intf: &[Interface], sock: &mut AsyncSocket) -> Paragr
                 bss.beacon_interval.unwrap(),
                 bss.seen_ms_ago.unwrap()
             );
+            if let Some(m) = interface.mac.as_ref() {
+                let addr: [u8; 6] = m.as_slice().try_into().unwrap();
+                let mac = MacAddr6::from(addr);
+
+                info!(
+                    "mac {} channel {} power {} phy {} device {}",
+                    mac,
+                    interface.channel.unwrap(),
+                    interface.power.unwrap(),
+                    interface.phy.unwrap(),
+                    interface.device.unwrap()
+                );
+            }
 
             let signal_span = Spans::from(vec![
                 Span::raw("Connection"),
