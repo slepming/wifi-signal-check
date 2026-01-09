@@ -16,7 +16,7 @@ use tui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Span, Spans},
     widgets::{Block, Borders, Paragraph},
 };
@@ -133,11 +133,12 @@ async fn create_device<'a>(intf: &[Interface], sock: &mut AsyncSocket) -> Paragr
                 String::from_utf8(indx.to_vec()).unwrap(),
                 Style::default().add_modifier(Modifier::BOLD),
             )]);
+            let signal = bss[0].signal.ok_or_else(|| 0).unwrap() / 100;
             let signal_span = Spans::from(vec![
                 Span::raw("Connection"),
                 Span::styled(
-                    format!(" {} ", bss[0].signal.ok_or_else(|| 0).unwrap() / 100),
-                    Style::default(),
+                    format!(" {} ", signal),
+                    Style::default().fg(get_color_for_signal(signal.abs())),
                 ),
                 Span::styled("dBm", Style::default().add_modifier(Modifier::ITALIC)),
             ]);
@@ -145,4 +146,12 @@ async fn create_device<'a>(intf: &[Interface], sock: &mut AsyncSocket) -> Paragr
         }
     }
     Paragraph::new(text).block(Block::default().borders(Borders::ALL))
+}
+
+fn get_color_for_signal(signal: i32) -> Color {
+    match signal {
+        0..=60 => Color::Green,
+        61..=100 => Color::Yellow,
+        _ => Color::Red,
+    }
 }
