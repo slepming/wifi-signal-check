@@ -1,5 +1,6 @@
 use std::{
     fs,
+    hash::{DefaultHasher, Hash, Hasher},
     io::{self, Stdout},
     path::Path,
     sync::LazyLock,
@@ -11,10 +12,10 @@ use crossterm::{
     terminal::{LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use log::info;
-use macaddr::{MacAddr, MacAddr6};
+use macaddr::MacAddr6;
 use neli_wifi::{AsyncSocket, Interface};
 use tui::{
-    Frame, Terminal,
+    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -57,6 +58,7 @@ async fn main() -> Result<(), io::Error> {
     let _ = terminal.clear();
 
     let mut _running: bool = true;
+    let mut hide_info = true;
 
     // add to app fern logger in the future
 
@@ -86,12 +88,24 @@ async fn main() -> Result<(), io::Error> {
             }
             AppState::Monitoring => {
                 let wifi_interface = socket.get_interfaces_info().await.unwrap();
-                let widget = create_device(&wifi_interface, &mut socket).await;
+                let widget = create_device(&wifi_interface, &mut socket, hide_info).await;
                 terminal.draw(|f| {
-                    let block: Block = Block::default().title("Monitoring").borders(Borders::ALL);
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints(
+                            [Constraint::Percentage(80), Constraint::Percentage(20)].as_ref(),
+                        )
+                        .split(f.size());
 
-                    f.render_widget(block, f.size());
-                    f.render_widget(widget, f.size());
+                    let block: Block = Block::default().title("Monitoring").borders(Borders::ALL);
+                    let hide_text = Paragraph::new(
+                        "For hide or show mac address and another adresses press 'h'",
+                    )
+                    .block(Block::default().borders(Borders::ALL));
+
+                    f.render_widget(block, chunks[0]);
+                    f.render_widget(widget, chunks[0]);
+                    f.render_widget(hide_text, chunks[1]);
                 })?;
             }
         }
@@ -111,6 +125,10 @@ async fn main() -> Result<(), io::Error> {
                 info!("chagning state to Monitoring..");
                 state = AppState::Monitoring;
             }
+            if key.code == KeyCode::Char('h') {
+                info!("changed hide boolean");
+                hide_info = !hide_info;
+            }
         }
     }
 
@@ -125,7 +143,11 @@ async fn main() -> Result<(), io::Error> {
     Ok(())
 }
 
-async fn create_device<'a>(intf: &[Interface], sock: &mut AsyncSocket) -> Paragraph<'a> {
+async fn create_device<'a>(
+    intf: &[Interface],
+    sock: &mut AsyncSocket,
+    hide_info: bool,
+) -> Paragraph<'a> {
     let mut text: Vec<Spans> = Vec::with_capacity(intf.len() + 2);
     for interface in intf {
         if let Some(indx) = interface.name.as_ref()
@@ -167,17 +189,25 @@ async fn create_device<'a>(intf: &[Interface], sock: &mut AsyncSocket) -> Paragr
                     interface.phy.unwrap(),
                     interface.device.unwrap()
                 );
-            }
 
-            let signal_span = Spans::from(vec![
-                Span::raw("Connection"),
-                Span::styled(
-                    format!(" {} ", signal),
-                    Style::default().fg(get_color_for_signal(signal.abs())),
-                ),
-                Span::styled("dBm", Style::default().add_modifier(Modifier::ITALIC)),
-            ]);
-            text.extend([span, signal_span]);
+                let signal_span = Spans::from(vec![
+                    Span::raw("Connection"),
+                    Span::styled(
+                        format!(" {} ", signal),
+                        Style::default().fg(get_color_for_signal(signal.abs())),
+                    ),
+                    Span::styled("dBm", Style::default().add_modifier(Modifier::ITALIC)),
+                ]);
+
+                let mac_span = Spans::from(vec![
+                    Span::raw("Mac address"),
+                    Span::styled(
+                        format!(" {} ", get_security_info(&mac.to_string(), hide_info)),
+                        Style::default().fg(Color::Green),
+                    ),
+                ]);
+                text.extend([span, signal_span, mac_span]);
+            }
         }
     }
     Paragraph::new(text).block(Block::default().borders(Borders::ALL))
@@ -189,4 +219,14 @@ fn get_color_for_signal(signal: i32) -> Color {
         61..=100 => Color::Yellow,
         _ => Color::Red,
     }
+}
+
+fn get_security_info(inf: &str, sec: bool) -> String {
+    let mut s = DefaultHasher::new();
+    if sec {
+        inf.hash(&mut s);
+        let res: String = s.finish().to_string();
+        return res;
+    }
+    inf.to_string()
 }
