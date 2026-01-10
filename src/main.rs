@@ -98,10 +98,8 @@ async fn main() -> Result<(), io::Error> {
                         .split(f.size());
 
                     let block: Block = Block::default().title("Monitoring").borders(Borders::ALL);
-                    let hide_text = Paragraph::new(
-                        "For hide or show mac address and another adresses press 'h'",
-                    )
-                    .block(Block::default().borders(Borders::ALL));
+                    let hide_text = Paragraph::new("For hide mac address press 'h'")
+                        .block(Block::default().borders(Borders::ALL));
 
                     f.render_widget(block, chunks[0]);
                     f.render_widget(widget, chunks[0]);
@@ -116,7 +114,7 @@ async fn main() -> Result<(), io::Error> {
                 info!("exiting..");
                 break;
             }
-            if key.code == KeyCode::Char('Q') {
+            if key.code == KeyCode::Char('q') {
                 _running = false;
                 info!("exiting..");
                 break;
@@ -179,7 +177,7 @@ async fn create_device<'a>(
             );
             if let Some(m) = interface.mac.as_ref() {
                 let addr: [u8; 6] = m.as_slice().try_into().unwrap();
-                let mac = MacAddr6::from(addr);
+                let mac = get_security_info(&MacAddr6::from(addr).to_string(), hide_info);
 
                 info!(
                     "mac {} channel {} power {} phy {} device {}",
