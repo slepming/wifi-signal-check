@@ -43,15 +43,14 @@ enum AppState<'a> {
 
 #[tokio::main]
 async fn main() -> Result<(), io::Error> {
-    let log_path = format!("{}/run-{}.log", CONFIGURATION.as_str(), Local::now());
-    let log_file: &Path = Path::new(&log_path);
+    let log_file: &Path = Path::new(CONFIGURATION.as_str());
     if !log_file.exists() {
         let _ = fs::create_dir(log_file);
     }
 
     // You can use info/debug/error loggers for logging and you're logs will be writing to file
     let _ = simple_logging::log_to_file(
-        format!("{}/{}", CONFIGURATION.as_str(), "run.log"),
+        format!("{}/run-{}.log", CONFIGURATION.as_str(), Local::now()),
         log::LevelFilter::Info,
     );
 
@@ -99,19 +98,27 @@ async fn main() -> Result<(), io::Error> {
                 terminal.draw(|f| {
                     let chunks = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+                        .constraints([
+                            Constraint::Percentage(10),
+                            Constraint::Percentage(80),
+                            Constraint::Percentage(10),
+                        ])
                         .split(f.size());
                     let header_chunk = chunks[0];
                     let description_chunk = chunks[1];
+                    let keybind_chunk = chunks[2];
 
                     let header_paragraph =
                         Paragraph::new(h).block(Block::default().borders(Borders::ALL));
+                    let keybind_paragraph = Paragraph::new("For update menu press 'u'")
+                        .block(Block::default().title("hint").borders(Borders::ALL));
                     let description_paragraph =
                         Paragraph::new(Span::styled(d, Style::default().fg(Color::Red)))
                             .block(Block::default().borders(Borders::ALL));
 
                     f.render_widget(header_paragraph, header_chunk);
                     f.render_widget(description_paragraph, description_chunk);
+                    f.render_widget(keybind_paragraph, keybind_chunk);
                 })?;
             }
             AppState::Monitoring => {
@@ -137,18 +144,24 @@ async fn main() -> Result<(), io::Error> {
                         )
                         .split(f.size());
 
-                    let block: Block = Block::default().title("Monitoring").borders(Borders::ALL);
-                    let hide_text = Paragraph::new("For hide mac address press 'h'")
-                        .block(Block::default().borders(Borders::ALL));
+                    let mut hide_text: &str = "";
+                    if hide_info {
+                        hide_text = "For show mac address press 'h'";
+                    } else {
+                        hide_text = "For hide mac address press 'h'";
+                    }
 
-                    f.render_widget(block, chunks[0]);
+                    let hide_paragraph = Paragraph::new(hide_text)
+                        .block(Block::default().title("hint").borders(Borders::ALL));
+
                     f.render_widget(widget, chunks[0]);
-                    f.render_widget(hide_text, chunks[1]);
+                    f.render_widget(hide_paragraph, chunks[1]);
                 })?;
             }
         }
 
         if let Some(key) = event::read()?.as_key_press_event() {
+            info!("{}", key.code);
             if key.code == KeyCode::Esc {
                 _running = false;
                 info!("exiting..");
@@ -167,6 +180,13 @@ async fn main() -> Result<(), io::Error> {
                 info!("changed hide boolean");
                 hide_info = !hide_info;
             }
+            if key.code == KeyCode::Char('u') {
+                state = AppState::Monitoring;
+                info!("updating screen");
+                continue;
+            }
+        } else {
+            continue;
         }
     }
 
@@ -258,7 +278,7 @@ async fn create_device<'a>(
             }
         }
     }
-    Ok(Paragraph::new(text).block(Block::default().borders(Borders::ALL)))
+    Ok(Paragraph::new(text).block(Block::default().title("monitoring").borders(Borders::ALL)))
 }
 
 /// Returns Color for signal level.
@@ -289,10 +309,10 @@ fn get_color_for_signal(signal: i32) -> Color {
 }
 
 /// Returns a information in numbers for secutiry info
-/// # Exmaple
+/// # Example
 ///
 /// ```
-/// // second argument useless, but if u don't need security - use false
+/// // second useless rgument, but if u don't need security - use false
 /// let info: String = get_secutiry_info("information", true);
 /// ```
 fn get_security_info(inf: &str, sec: bool) -> String {
