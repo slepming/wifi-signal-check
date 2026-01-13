@@ -1,3 +1,4 @@
+use chrono::Local;
 use std::{
     fs,
     hash::{DefaultHasher, Hash, Hasher},
@@ -11,6 +12,8 @@ use crossterm::{
     execute,
     terminal::{LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+#[cfg(target_os = "windows")]
+use directories::UserDirs;
 use log::info;
 use macaddr::MacAddr6;
 use neli_wifi::{AsyncSocket, Interface};
@@ -23,9 +26,14 @@ use tui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-static LINUX_CONFIG: LazyLock<String> = LazyLock::new(|| {
+#[cfg(target_os = "linux")]
+static CONFIGURATION: LazyLock<String> = LazyLock::new(|| {
     std::env::var("HOME").expect("HOME var not exists") + "/.config/wifi-check-tui"
 });
+
+#[cfg(target_os = "windows")]
+static CONFIGURATION: LazyLock<String> =
+    LazyLock::new(|| UserDirs::home_dir() + "\\wifi-check-tui");
 
 enum AppState<'a> {
     Monitoring,
@@ -35,7 +43,7 @@ enum AppState<'a> {
 
 #[tokio::main]
 async fn main() -> Result<(), io::Error> {
-    let log_path = format!("{}/{}", LINUX_CONFIG.as_str(), "run.log");
+    let log_path = format!("{}/run-{}.log", CONFIGURATION.as_str(), Local::now());
     let log_file: &Path = Path::new(&log_path);
     if !log_file.exists() {
         let _ = fs::create_dir(log_file);
@@ -43,7 +51,7 @@ async fn main() -> Result<(), io::Error> {
 
     // You can use info/debug/error loggers for logging and you're logs will be writing to file
     let _ = simple_logging::log_to_file(
-        format!("{}/{}", LINUX_CONFIG.as_str(), "run.log"),
+        format!("{}/{}", CONFIGURATION.as_str(), "run.log"),
         log::LevelFilter::Info,
     );
 
@@ -253,6 +261,25 @@ async fn create_device<'a>(
     Ok(Paragraph::new(text).block(Block::default().borders(Borders::ALL)))
 }
 
+/// Returns Color for signal level.
+///
+/// # Example
+///
+/// ```
+/// use tui::style::Color;
+///
+/// let signal: i32 = 40;
+///
+/// // Returns green color for good internet connection level
+/// let color_for_signal: Color = get_color_for_signal(signal);
+/// ```
+/// # And example for bad connection
+/// ```
+/// let signal: i32 = 120;
+///
+/// // And returns red color for bad internet connection level
+/// let color_for_signal: Color = get_color_for_signal(signal);
+/// ```
 fn get_color_for_signal(signal: i32) -> Color {
     match signal {
         0..=60 => Color::Green,
@@ -261,6 +288,13 @@ fn get_color_for_signal(signal: i32) -> Color {
     }
 }
 
+/// Returns a information in numbers for secutiry info
+/// # Exmaple
+///
+/// ```
+/// // second argument useless, but if u don't need security - use false
+/// let info: String = get_secutiry_info("information", true);
+/// ```
 fn get_security_info(inf: &str, sec: bool) -> String {
     let mut s = DefaultHasher::new();
     if sec {
