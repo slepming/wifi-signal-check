@@ -99,7 +99,8 @@ async fn main() -> Result<(), io::Error> {
                     let header_paragraph =
                         Paragraph::new(h).block(Block::default().borders(Borders::ALL));
                     let description_paragraph =
-                        Paragraph::new(d).block(Block::default().borders(Borders::ALL));
+                        Paragraph::new(Span::styled(d, Style::default().fg(Color::Red)))
+                            .block(Block::default().borders(Borders::ALL));
 
                     f.render_widget(header_paragraph, header_chunk);
                     f.render_widget(description_paragraph, description_chunk);
@@ -190,7 +191,10 @@ async fn create_device<'a>(
             let status = match bss.status {
                 Some(stat) => stat,
                 None => {
-                    return Err(AppState::Error { h: "", d: "" });
+                    return Err(AppState::Error {
+                        h: "Internet connection failed",
+                        d: "Internet connection do not exists",
+                    });
                 }
             };
             let span = Spans::from(vec![Span::styled(
