@@ -27,9 +27,10 @@ static LINUX_CONFIG: LazyLock<String> = LazyLock::new(|| {
     std::env::var("HOME").expect("HOME var not exists") + "/.config/wifi-check-tui"
 });
 
-enum AppState {
+enum AppState<'a> {
     Monitoring,
     Main,
+    Error { h: &'a str, d: &'a str },
 }
 
 #[tokio::main]
@@ -86,9 +87,39 @@ async fn main() -> Result<(), io::Error> {
                     f.render_widget(paragraph, chunks[1]);
                 })?;
             }
+            AppState::Error { h, d } => {
+                terminal.draw(|f| {
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+                        .split(f.size());
+                    let header_chunk = chunks[0];
+                    let description_chunk = chunks[1];
+
+                    let header_paragraph =
+                        Paragraph::new(h).block(Block::default().borders(Borders::ALL));
+                    let description_paragraph =
+                        Paragraph::new(d).block(Block::default().borders(Borders::ALL));
+
+                    f.render_widget(header_paragraph, header_chunk);
+                    f.render_widget(description_paragraph, description_chunk);
+                })?;
+            }
             AppState::Monitoring => {
                 let wifi_interface = socket.get_interfaces_info().await.unwrap();
-                let widget = create_device(&wifi_interface, &mut socket, hide_info).await;
+                if wifi_interface.len() == 1 {
+                    state = AppState::Error {
+                        h: "wifi interface error",
+                        d: "wifi interface is not existed",
+                    };
+                }
+                let widget = match create_device(&wifi_interface, &mut socket, hide_info).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        state = e;
+                        continue;
+                    }
+                };
                 terminal.draw(|f| {
                     let chunks = Layout::default()
                         .direction(Direction::Vertical)
@@ -137,6 +168,7 @@ async fn main() -> Result<(), io::Error> {
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
+    let _ = terminal.clear();
 
     Ok(())
 }
@@ -145,7 +177,7 @@ async fn create_device<'a>(
     intf: &[Interface],
     sock: &mut AsyncSocket,
     hide_info: bool,
-) -> Paragraph<'a> {
+) -> Result<Paragraph<'a>, AppState<'a>> {
     let mut text: Vec<Spans> = Vec::with_capacity(intf.len() + 2);
     for interface in intf {
         if let Some(indx) = interface.name.as_ref()
@@ -155,9 +187,15 @@ async fn create_device<'a>(
                 .unwrap()
                 .first_mut()
         {
+            let status = match bss.status {
+                Some(stat) => stat,
+                None => {
+                    return Err(AppState::Error { h: "", d: "" });
+                }
+            };
             let span = Spans::from(vec![Span::styled(
                 String::from_utf8(indx.to_vec()).unwrap(),
-                Style::default().add_modifier(if bss.status.unwrap() == 1 {
+                Style::default().add_modifier(if status == 1 {
                     Modifier::BOLD
                 } else {
                     Modifier::DIM
@@ -208,7 +246,7 @@ async fn create_device<'a>(
             }
         }
     }
-    Paragraph::new(text).block(Block::default().borders(Borders::ALL))
+    Ok(Paragraph::new(text).block(Block::default().borders(Borders::ALL)))
 }
 
 fn get_color_for_signal(signal: i32) -> Color {
