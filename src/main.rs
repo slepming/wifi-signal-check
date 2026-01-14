@@ -4,7 +4,13 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::{self, Stdout},
     path::Path,
-    sync::LazyLock,
+    process::exit,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
+use tokio::{
+    sync::{Mutex, RwLock},
+    time::interval,
 };
 
 use crossterm::{
@@ -35,10 +41,33 @@ static CONFIGURATION: LazyLock<String> = LazyLock::new(|| {
 static CONFIGURATION: LazyLock<String> =
     LazyLock::new(|| UserDirs::home_dir() + "\\wifi-check-tui");
 
+#[derive(Copy, Clone, Debug)]
 enum AppState<'a> {
     Monitoring,
     Main,
     Error { h: &'a str, d: &'a str },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProgramState<'a> {
+    pub hide_info: bool,
+    pub running: bool,
+    pub state: AppState<'a>,
+}
+
+impl<'a> ProgramState<'a> {
+    /// Changes state for ProgramState
+    pub fn change_state(&mut self, s: AppState<'a>) {
+        self.state = s;
+    }
+
+    pub fn change_running(&mut self) {
+        self.running = !self.running;
+    }
+
+    pub fn toggle_hide_info(&mut self) {
+        self.hide_info = !self.hide_info;
+    }
 }
 
 #[tokio::main]
@@ -56,7 +85,11 @@ async fn main() -> Result<(), io::Error> {
 
     info!("createing socket");
     let mut socket: AsyncSocket = AsyncSocket::connect().expect("device not found");
-    let mut state: AppState = AppState::Main;
+    let state: Arc<Mutex<ProgramState>> = Arc::new(Mutex::new(ProgramState {
+        hide_info: true,
+        running: true,
+        state: AppState::Main,
+    }));
 
     info!("app started..");
     enable_raw_mode()?;
@@ -65,13 +98,57 @@ async fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
     let _ = terminal.clear();
 
-    let mut _running: bool = true;
-    let mut hide_info = true;
+    let mut interval = interval(Duration::from_secs(1));
 
-    // add to app fern logger in the future
+    let state_clone = state.clone();
 
-    loop {
-        match state {
+    tokio::task::spawn(async move {
+        let state_task = state_clone.clone();
+        loop {
+            if let Some(key) = event::read().unwrap().as_key_press_event() {
+                info!("{}", key.code);
+                let mut st = state_task.lock().await;
+                if key.code == KeyCode::Esc {
+                    info!("exiting..");
+                    st.change_running();
+                }
+                if key.code == KeyCode::Char('q') {
+                    info!("exiting..");
+                    st.change_running();
+                }
+                if key.code == KeyCode::Char('m') {
+                    info!("chagning state to Monitoring..");
+                    st.change_state(AppState::Monitoring);
+                }
+                if key.code == KeyCode::Char('h') {
+                    info!("changed hide boolean");
+                    st.toggle_hide_info();
+                }
+                if key.code == KeyCode::Char('u') {
+                    info!("updating screen");
+                    st.change_state(AppState::Monitoring);
+                }
+            }
+        }
+    });
+
+    #[cfg(debug_assertions)]
+    let mut counter: u8 = 0;
+
+    // need add to app fern logger in the future
+    while state.clone().lock().await.running {
+        interval.tick().await;
+
+        #[cfg(debug_assertions)]
+        {
+            counter += 1;
+            if counter == 30 {
+                state.clone().lock().await.change_running();
+            }
+        }
+
+        let program_state = *state.clone().lock().await;
+        match program_state.state {
             AppState::Main => {
                 terminal.draw(|f| {
                     // Create a vertical layout with 2 sections
@@ -124,17 +201,25 @@ async fn main() -> Result<(), io::Error> {
             AppState::Monitoring => {
                 let wifi_interface = socket.get_interfaces_info().await.unwrap();
                 if wifi_interface.len() == 1 {
-                    state = AppState::Error {
+                    state.lock().await.change_state(AppState::Error {
                         h: "wifi interface error",
                         d: "wifi interface is not existed",
-                    };
+                    });
                 }
-                let widget = match create_device(&wifi_interface, &mut socket, hide_info).await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        state = e;
-                        continue;
-                    }
+                let widget =
+                    match create_device(&wifi_interface, &mut socket, state.lock().await.hide_info)
+                        .await
+                    {
+                        Ok(t) => t,
+                        Err(e) => {
+                            state.lock().await.change_state(e);
+                            continue;
+                        }
+                    };
+                let hide_text = if program_state.hide_info {
+                    "For show mac address press 'h'"
+                } else {
+                    "For hide mac address press 'h'"
                 };
                 terminal.draw(|f| {
                     let chunks = Layout::default()
@@ -144,13 +229,6 @@ async fn main() -> Result<(), io::Error> {
                         )
                         .split(f.size());
 
-                    let mut hide_text: &str = "";
-                    if hide_info {
-                        hide_text = "For show mac address press 'h'";
-                    } else {
-                        hide_text = "For hide mac address press 'h'";
-                    }
-
                     let hide_paragraph = Paragraph::new(hide_text)
                         .block(Block::default().title("hint").borders(Borders::ALL));
 
@@ -158,35 +236,6 @@ async fn main() -> Result<(), io::Error> {
                     f.render_widget(hide_paragraph, chunks[1]);
                 })?;
             }
-        }
-
-        if let Some(key) = event::read()?.as_key_press_event() {
-            info!("{}", key.code);
-            if key.code == KeyCode::Esc {
-                _running = false;
-                info!("exiting..");
-                break;
-            }
-            if key.code == KeyCode::Char('q') {
-                _running = false;
-                info!("exiting..");
-                break;
-            }
-            if key.code == KeyCode::Char('m') {
-                info!("chagning state to Monitoring..");
-                state = AppState::Monitoring;
-            }
-            if key.code == KeyCode::Char('h') {
-                info!("changed hide boolean");
-                hide_info = !hide_info;
-            }
-            if key.code == KeyCode::Char('u') {
-                state = AppState::Monitoring;
-                info!("updating screen");
-                continue;
-            }
-        } else {
-            continue;
         }
     }
 
