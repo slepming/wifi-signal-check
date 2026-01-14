@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{Mutex, RwLock},
+    sync::{Mutex, RwLock, oneshot},
     time::interval,
 };
 
@@ -102,9 +102,9 @@ async fn main() -> Result<(), io::Error> {
 
     let state_clone = state.clone();
 
-    tokio::task::spawn(async move {
+    let input_thread = tokio::task::spawn(async move {
         let state_task = state_clone.clone();
-        loop {
+        while state_task.lock().await.running {
             if let Some(key) = event::read().unwrap().as_key_press_event() {
                 info!("{}", key.code);
                 let mut st = state_task.lock().await;
