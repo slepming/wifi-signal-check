@@ -4,14 +4,10 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::{self, Stdout},
     path::Path,
-    process::exit,
     sync::{Arc, LazyLock},
     time::Duration,
 };
-use tokio::{
-    sync::{Mutex, RwLock, oneshot},
-    time::interval,
-};
+use tokio::{sync::RwLock, time::interval};
 
 use crossterm::{
     event::{self, DisableMouseCapture, KeyCode},
@@ -85,7 +81,7 @@ async fn main() -> Result<(), io::Error> {
 
     info!("createing socket");
     let mut socket: AsyncSocket = AsyncSocket::connect().expect("device not found");
-    let state: Arc<Mutex<ProgramState>> = Arc::new(Mutex::new(ProgramState {
+    let state: Arc<RwLock<ProgramState>> = Arc::new(RwLock::new(ProgramState {
         hide_info: true,
         running: true,
         state: AppState::Main,
@@ -102,12 +98,12 @@ async fn main() -> Result<(), io::Error> {
 
     let state_clone = state.clone();
 
-    let input_thread = tokio::task::spawn(async move {
+    tokio::task::spawn(async move {
         let state_task = state_clone.clone();
-        while state_task.lock().await.running {
+        while state_task.read().await.running {
             if let Some(key) = event::read().unwrap().as_key_press_event() {
                 info!("{}", key.code);
-                let mut st = state_task.lock().await;
+                let mut st = state_task.write().await;
                 if key.code == KeyCode::Esc {
                     info!("exiting..");
                     st.change_running();
@@ -136,18 +132,18 @@ async fn main() -> Result<(), io::Error> {
     let mut counter: u8 = 0;
 
     // need add to app fern logger in the future
-    while state.clone().lock().await.running {
+    while state.clone().read().await.running {
         interval.tick().await;
 
         #[cfg(debug_assertions)]
         {
             counter += 1;
             if counter == 30 {
-                state.clone().lock().await.change_running();
+                state.write().await.change_running();
             }
         }
 
-        let program_state = *state.clone().lock().await;
+        let mut program_state = *state.clone().read().await;
         match program_state.state {
             AppState::Main => {
                 terminal.draw(|f| {
@@ -201,21 +197,24 @@ async fn main() -> Result<(), io::Error> {
             AppState::Monitoring => {
                 let wifi_interface = socket.get_interfaces_info().await.unwrap();
                 if wifi_interface.len() == 1 {
-                    state.lock().await.change_state(AppState::Error {
+                    program_state.change_state(AppState::Error {
                         h: "wifi interface error",
                         d: "wifi interface is not existed",
                     });
                 }
-                let widget =
-                    match create_device(&wifi_interface, &mut socket, state.lock().await.hide_info)
-                        .await
-                    {
-                        Ok(t) => t,
-                        Err(e) => {
-                            state.lock().await.change_state(e);
-                            continue;
-                        }
-                    };
+                let widget = match create_device(
+                    &wifi_interface,
+                    &mut socket,
+                    program_state.hide_info,
+                )
+                .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        program_state.change_state(e);
+                        continue;
+                    }
+                };
                 let hide_text = if program_state.hide_info {
                     "For show mac address press 'h'"
                 } else {
