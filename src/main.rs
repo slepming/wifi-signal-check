@@ -14,8 +14,10 @@ use crossterm::{
     execute,
     terminal::{LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+
 #[cfg(target_os = "windows")]
 use directories::UserDirs;
+
 use log::info;
 use macaddr::MacAddr6;
 use neli_wifi::{AsyncSocket, Interface};
@@ -94,40 +96,32 @@ async fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
     let _ = terminal.clear();
 
-    let mut interval = interval(Duration::from_secs(1));
-
     let state_clone = state.clone();
 
-    tokio::task::spawn(async move {
-        let state_task = state_clone.clone();
-        while state_task.read().await.running {
-            if let Some(key) = event::read().unwrap().as_key_press_event() {
-                info!("{}", key.code);
-                let mut st = state_task.write().await;
-                if key.code == KeyCode::Esc {
-                    info!("exiting..");
-                    st.change_running();
-                }
-                if key.code == KeyCode::Char('q') {
-                    info!("exiting..");
-                    st.change_running();
-                }
-                if key.code == KeyCode::Char('m') {
-                    info!("chagning state to Monitoring..");
-                    st.change_state(AppState::Monitoring);
-                }
-                if key.code == KeyCode::Char('h') {
-                    info!("changed hide boolean");
-                    st.toggle_hide_info();
-                }
-                if key.code == KeyCode::Char('u') {
-                    info!("updating screen");
-                    st.change_state(AppState::Monitoring);
-                }
-            }
-        }
-    });
+    open_input_thread(state_clone);
 
+    let _ = start(state, &mut terminal, &mut socket).await;
+
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+    let _ = terminal.clear();
+
+    Ok(())
+}
+
+/// Main function for start app
+async fn start(
+    state: Arc<RwLock<ProgramState<'_>>>,
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    socket: &mut AsyncSocket,
+) -> Result<(), io::Error> {
+    let mut interval = interval(Duration::from_secs(1));
+    // created for my fails when program can't close :<
     #[cfg(debug_assertions)]
     let mut counter: u8 = 0;
 
@@ -202,19 +196,14 @@ async fn main() -> Result<(), io::Error> {
                         d: "wifi interface is not existed",
                     });
                 }
-                let widget = match create_device(
-                    &wifi_interface,
-                    &mut socket,
-                    program_state.hide_info,
-                )
-                .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        program_state.change_state(e);
-                        continue;
-                    }
-                };
+                let widget =
+                    match create_device(&wifi_interface, socket, program_state.hide_info).await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            program_state.change_state(e);
+                            continue;
+                        }
+                    };
                 let hide_text = if program_state.hide_info {
                     "For show mac address press 'h'"
                 } else {
@@ -237,19 +226,43 @@ async fn main() -> Result<(), io::Error> {
             }
         }
     }
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-    let _ = terminal.clear();
-
     Ok(())
 }
 
+/// Thread for input
+fn open_input_thread(state_clone: Arc<RwLock<ProgramState<'static>>>) {
+    tokio::task::spawn(async move {
+        let state_task = state_clone.clone();
+        while state_task.read().await.running {
+            if let Some(key) = event::read().unwrap().as_key_press_event() {
+                info!("{}", key.code);
+                let mut st = state_task.write().await;
+                if key.code == KeyCode::Esc {
+                    info!("exiting..");
+                    st.change_running();
+                }
+                if key.code == KeyCode::Char('q') {
+                    info!("exiting..");
+                    st.change_running();
+                }
+                if key.code == KeyCode::Char('m') {
+                    info!("chagning state to Monitoring..");
+                    st.change_state(AppState::Monitoring);
+                }
+                if key.code == KeyCode::Char('h') {
+                    info!("changed hide boolean");
+                    st.toggle_hide_info();
+                }
+                if key.code == KeyCode::Char('u') {
+                    info!("updating screen");
+                    st.change_state(AppState::Monitoring);
+                }
+            }
+        }
+    });
+}
+
+/// Returns Paragraph for TUI if everything OK or else AppState with state in Error
 async fn create_device<'a>(
     intf: &[Interface],
     sock: &mut AsyncSocket,
