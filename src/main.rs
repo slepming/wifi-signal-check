@@ -18,7 +18,7 @@ use crossterm::{
 #[cfg(target_os = "windows")]
 use directories::UserDirs;
 
-use log::info;
+use log::{debug, info};
 use macaddr::MacAddr6;
 use neli_wifi::{AsyncSocket, Interface};
 use tui::{
@@ -91,7 +91,7 @@ async fn main() -> Result<(), io::Error> {
 
     open_input_thread(state_clone);
 
-    let _ = start(state, &mut terminal, &mut socket).await;
+    start(state, &mut terminal, &mut socket).await?;
 
     disable_raw_mode()?;
     execute!(
@@ -186,7 +186,9 @@ async fn start(
                         h: "wifi interface error",
                         d: "wifi interface is not existed",
                     });
+                    continue;
                 }
+                debug!("initialization wifi_interface");
                 let widget =
                     match create_device(&wifi_interface, socket, program_state.hide_info).await {
                         Ok(t) => t,
