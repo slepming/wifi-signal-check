@@ -70,16 +70,7 @@ impl<'a> ProgramState<'a> {
 
 #[tokio::main]
 async fn main() -> Result<(), io::Error> {
-    let log_file: &Path = Path::new(CONFIGURATION.as_str());
-    if !log_file.exists() {
-        let _ = fs::create_dir(log_file);
-    }
-
-    // You can use info/debug/error loggers for logging and you're logs will be writing to file
-    let _ = simple_logging::log_to_file(
-        format!("{}/run-{}.log", CONFIGURATION.as_str(), Local::now()),
-        log::LevelFilter::Info,
-    );
+    initialization_log_file();
 
     info!("createing socket");
     let mut socket: AsyncSocket = AsyncSocket::connect().expect("device not found");
@@ -227,6 +218,20 @@ async fn start(
         }
     }
     Ok(())
+}
+
+/// Starts logging in file
+fn initialization_log_file() {
+    let log_file: &Path = Path::new(CONFIGURATION.as_str());
+    if !log_file.exists() {
+        let _ = fs::create_dir(log_file);
+    }
+
+    // You can use info/debug/error loggers for logging and you're logs will be writing to file
+    let _ = simple_logging::log_to_file(
+        format!("{}/run-{}.log", CONFIGURATION.as_str(), Local::now()),
+        log::LevelFilter::Info,
+    );
 }
 
 /// Thread for input
