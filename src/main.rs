@@ -5,6 +5,8 @@ use std::{
     io::{self, Stdout},
     path::Path,
     sync::{Arc, LazyLock, RwLock},
+    thread::sleep,
+    time::Duration,
 };
 
 use crossterm::{
@@ -117,25 +119,12 @@ fn start(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     socket: &mut Socket,
 ) -> Result<(), io::Error> {
-    // created for my fails when program can't close :<
-    #[cfg(debug_assertions)]
-    let mut counter: u8 = 0;
-
     // need add to app fern logger in the future
     loop {
         let rrunning = state.read().unwrap().running;
 
         if !rrunning {
             break;
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            counter += 1;
-            if counter == 30 {
-                let mut st = state.write().unwrap();
-                st.change_running();
-            }
         }
 
         let rhide_info = state.read().unwrap().hide_info;
@@ -152,14 +141,13 @@ fn start(
                         )
                         .split(f.size());
 
-                    let information = Paragraph::new("Приложение создано при помощи библиотек neli_wifi, tui, tokio и их зависимостей")
-                        .block(Block::default()
-                            .borders(Borders::ALL)
-                            .title("Info"));
+                    let information = Paragraph::new(
+                        "Приложение создано при помощи библиотек neli_wifi, tui и их зависимостей",
+                    )
+                    .block(Block::default().borders(Borders::ALL).title("Info"));
 
-                    let tip =
-                        Paragraph::new("Press 'esc' to quit\nPress 'm' to change state")
-                            .block(Block::default().borders(Borders::ALL).title("Tip"));
+                    let tip = Paragraph::new("Press 'esc' to quit\nPress 'm' to change state")
+                        .block(Block::default().borders(Borders::ALL).title("Tip"));
 
                     // Render the widgets in their respective chunks
                     f.render_widget(information, chunks[0]);
@@ -232,7 +220,7 @@ fn start(
                 })?;
             }
         }
-        //thread::sleep(Duration::from_millis(50));
+        sleep(Duration::from_millis(100));
     }
     Ok(())
 }
@@ -259,9 +247,8 @@ fn open_input_thread(state_clone: Arc<RwLock<ProgramState<'static>>>) {
                 break;
             }
 
-            let mut wstate = state_clone.write().unwrap();
-
             if let Some(key) = event::read().unwrap().as_key_press_event() {
+                let mut wstate = state_clone.write().unwrap();
                 info!("{}", key.code);
                 if key.code == KeyCode::Esc {
                     info!("exiting..");
@@ -285,6 +272,7 @@ fn open_input_thread(state_clone: Arc<RwLock<ProgramState<'static>>>) {
                 }
             }
         }
+        debug!("exit from thread");
     });
 }
 
