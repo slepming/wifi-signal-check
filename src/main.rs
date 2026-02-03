@@ -4,13 +4,11 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::{self, Stdout},
     path::Path,
-    sync::{Arc, LazyLock},
-    time::Duration,
+    sync::{Arc, LazyLock, RwLock},
 };
-use tokio::{sync::RwLock, time::interval};
 
 use crossterm::{
-    event::{self, DisableMouseCapture, KeyCode},
+    event::{self, DisableMouseCapture, KeyCode, poll, read},
     execute,
     terminal::{LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -20,7 +18,7 @@ use directories::UserDirs;
 
 use log::{debug, info};
 use macaddr::MacAddr6;
-use neli_wifi::{AsyncSocket, Interface};
+use neli_wifi::{Interface, Socket};
 use tui::{
     Terminal,
     backend::CrosstermBackend,
@@ -46,6 +44,16 @@ enum AppState<'a> {
     Error { h: &'a str, d: &'a str },
 }
 
+impl<'a> std::fmt::Display for AppState<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppState::Monitoring => write!(f, "Monitoring"),
+            AppState::Main => write!(f, "Main"),
+            AppState::Error { h, d } => write!(f, "Error header {}; description {}", h, d),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ProgramState<'a> {
     pub hide_info: bool,
@@ -68,12 +76,11 @@ impl<'a> ProgramState<'a> {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), io::Error> {
+fn main() -> Result<(), io::Error> {
     initialization_log_file();
 
     info!("createing socket");
-    let mut socket: AsyncSocket = AsyncSocket::connect().expect("device not found");
+    let mut socket: Socket = Socket::connect().expect("device not found");
     let state: Arc<RwLock<ProgramState>> = Arc::new(RwLock::new(ProgramState {
         hide_info: true,
         running: true,
@@ -88,10 +95,9 @@ async fn main() -> Result<(), io::Error> {
     let _ = terminal.clear();
 
     let state_clone = state.clone();
-
     open_input_thread(state_clone);
 
-    start(state, &mut terminal, &mut socket).await?;
+    start(state, &mut terminal, &mut socket)?;
 
     disable_raw_mode()?;
     execute!(
@@ -106,30 +112,36 @@ async fn main() -> Result<(), io::Error> {
 }
 
 /// Main function for start app
-async fn start(
+fn start(
     state: Arc<RwLock<ProgramState<'_>>>,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    socket: &mut AsyncSocket,
+    socket: &mut Socket,
 ) -> Result<(), io::Error> {
-    let mut interval = interval(Duration::from_secs(1));
     // created for my fails when program can't close :<
     #[cfg(debug_assertions)]
     let mut counter: u8 = 0;
 
     // need add to app fern logger in the future
-    while state.clone().read().await.running {
-        interval.tick().await;
+    loop {
+        let rrunning = state.read().unwrap().running;
+
+        if !rrunning {
+            break;
+        }
 
         #[cfg(debug_assertions)]
         {
             counter += 1;
             if counter == 30 {
-                state.write().await.change_running();
+                let mut st = state.write().unwrap();
+                st.change_running();
             }
         }
 
-        let mut program_state = *state.clone().read().await;
-        match program_state.state {
+        let rhide_info = state.read().unwrap().hide_info;
+        let rstate = state.read().unwrap().state;
+        info!("current state {}", rstate);
+        match rstate {
             AppState::Main => {
                 terminal.draw(|f| {
                     // Create a vertical layout with 2 sections
@@ -140,16 +152,18 @@ async fn start(
                         )
                         .split(f.size());
 
-                    // Create a block with borders
-                    let block = Block::default().title("Main").borders(Borders::ALL);
+                    let information = Paragraph::new("Приложение создано при помощи библиотек neli_wifi, tui, tokio и их зависимостей")
+                        .block(Block::default()
+                            .borders(Borders::ALL)
+                            .title("Info"));
 
-                    let paragraph =
+                    let tip =
                         Paragraph::new("Press 'esc' to quit\nPress 'm' to change state")
-                            .block(Block::default().borders(Borders::ALL));
+                            .block(Block::default().borders(Borders::ALL).title("Tip"));
 
                     // Render the widgets in their respective chunks
-                    f.render_widget(block, chunks[0]);
-                    f.render_widget(paragraph, chunks[1]);
+                    f.render_widget(information, chunks[0]);
+                    f.render_widget(tip, chunks[1]);
                 })?;
             }
             AppState::Error { h, d } => {
@@ -180,24 +194,24 @@ async fn start(
                 })?;
             }
             AppState::Monitoring => {
-                let wifi_interface = socket.get_interfaces_info().await.unwrap();
+                info!("Hello from monitoring");
+                let wifi_interface = socket.get_interfaces_info().unwrap();
                 if wifi_interface.len() == 1 {
-                    program_state.change_state(AppState::Error {
+                    state.write().unwrap().change_state(AppState::Error {
                         h: "wifi interface error",
                         d: "wifi interface is not existed",
                     });
                     continue;
                 }
                 debug!("initialization wifi_interface");
-                let widget =
-                    match create_device(&wifi_interface, socket, program_state.hide_info).await {
-                        Ok(t) => t,
-                        Err(e) => {
-                            program_state.change_state(e);
-                            continue;
-                        }
-                    };
-                let hide_text = if program_state.hide_info {
+                let widget = match create_device(&wifi_interface, socket, rhide_info) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        state.write().unwrap().change_state(e);
+                        continue;
+                    }
+                };
+                let hide_text = if rhide_info {
                     "For show mac address press 'h'"
                 } else {
                     "For hide mac address press 'h'"
@@ -218,51 +232,56 @@ async fn start(
                 })?;
             }
         }
+        //thread::sleep(Duration::from_millis(50));
     }
     Ok(())
 }
 
 /// Starts logging in file
 fn initialization_log_file() {
-    let log_file: &Path = Path::new(CONFIGURATION.as_str());
-    if !log_file.exists() {
-        let _ = fs::create_dir(log_file);
+    let log_path_raw = format!("{}/logs/", CONFIGURATION.as_str());
+    let log_path: &Path = Path::new(&log_path_raw);
+    let log_file = format!("{}/run-{}.log", log_path.to_str().unwrap(), Local::now());
+    if !log_path.exists() {
+        let _ = fs::create_dir(log_path);
     }
 
     // You can use info/debug/error loggers for logging and you're logs will be writing to file
-    let _ = simple_logging::log_to_file(
-        format!("{}/run-{}.log", CONFIGURATION.as_str(), Local::now()),
-        log::LevelFilter::Info,
-    );
+    let _ = simple_logging::log_to_file(log_file, log::LevelFilter::Info);
 }
 
 /// Thread for input
 fn open_input_thread(state_clone: Arc<RwLock<ProgramState<'static>>>) {
-    tokio::task::spawn(async move {
-        let state_task = state_clone.clone();
-        while state_task.read().await.running {
+    info!("input thread starting..");
+    std::thread::spawn(move || {
+        loop {
+            if !state_clone.read().unwrap().running {
+                break;
+            }
+
+            let mut wstate = state_clone.write().unwrap();
+
             if let Some(key) = event::read().unwrap().as_key_press_event() {
                 info!("{}", key.code);
-                let mut st = state_task.write().await;
                 if key.code == KeyCode::Esc {
                     info!("exiting..");
-                    st.change_running();
+                    wstate.change_running();
                 }
                 if key.code == KeyCode::Char('q') {
                     info!("exiting..");
-                    st.change_running();
+                    wstate.change_running();
                 }
                 if key.code == KeyCode::Char('m') {
                     info!("chagning state to Monitoring..");
-                    st.change_state(AppState::Monitoring);
+                    wstate.change_state(AppState::Monitoring);
                 }
                 if key.code == KeyCode::Char('h') {
                     info!("changed hide boolean");
-                    st.toggle_hide_info();
+                    wstate.toggle_hide_info();
                 }
                 if key.code == KeyCode::Char('u') {
                     info!("updating screen");
-                    st.change_state(AppState::Monitoring);
+                    wstate.change_state(AppState::Monitoring);
                 }
             }
         }
@@ -270,9 +289,9 @@ fn open_input_thread(state_clone: Arc<RwLock<ProgramState<'static>>>) {
 }
 
 /// Returns Paragraph for TUI if everything OK or else AppState with state in Error
-async fn create_device<'a>(
+fn create_device<'a>(
     intf: &[Interface],
-    sock: &mut AsyncSocket,
+    sock: &mut Socket,
     hide_info: bool,
 ) -> Result<Paragraph<'a>, AppState<'a>> {
     let mut text: Vec<Spans> = Vec::with_capacity(intf.len() + 2);
@@ -280,7 +299,6 @@ async fn create_device<'a>(
         if let Some(indx) = interface.name.as_ref()
             && let Some(bss) = sock
                 .get_bss_info(interface.index.unwrap())
-                .await
                 .unwrap()
                 .first_mut()
         {
