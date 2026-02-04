@@ -10,7 +10,7 @@ use std::{
 };
 
 use crossterm::{
-    event::{self, DisableMouseCapture, KeyCode, poll, read},
+    event::{self, DisableMouseCapture, KeyCode},
     execute,
     terminal::{LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -30,6 +30,9 @@ use tui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+mod appstate;
+use appstate::{AppState, ProgramState};
+
 #[cfg(target_os = "linux")]
 static CONFIGURATION: LazyLock<String> = LazyLock::new(|| {
     std::env::var("HOME").expect("HOME var not exists") + "/.config/wifi-check-tui"
@@ -38,45 +41,6 @@ static CONFIGURATION: LazyLock<String> = LazyLock::new(|| {
 #[cfg(target_os = "windows")]
 static CONFIGURATION: LazyLock<String> =
     LazyLock::new(|| UserDirs::home_dir() + "\\wifi-check-tui");
-
-#[derive(Copy, Clone, Debug)]
-enum AppState<'a> {
-    Monitoring,
-    Main,
-    Error { h: &'a str, d: &'a str },
-}
-
-impl<'a> std::fmt::Display for AppState<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AppState::Monitoring => write!(f, "Monitoring"),
-            AppState::Main => write!(f, "Main"),
-            AppState::Error { h, d } => write!(f, "Error header {}; description {}", h, d),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ProgramState<'a> {
-    pub hide_info: bool,
-    pub running: bool,
-    pub state: AppState<'a>,
-}
-
-impl<'a> ProgramState<'a> {
-    /// Changes state for ProgramState
-    pub fn change_state(&mut self, s: AppState<'a>) {
-        self.state = s;
-    }
-
-    pub fn change_running(&mut self) {
-        self.running = !self.running;
-    }
-
-    pub fn toggle_hide_info(&mut self) {
-        self.hide_info = !self.hide_info;
-    }
-}
 
 fn main() -> Result<(), io::Error> {
     initialization_log_file();
