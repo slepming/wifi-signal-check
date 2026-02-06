@@ -63,7 +63,7 @@ fn main() -> Result<(), io::Error> {
     let state_clone = state.clone();
     open_input_thread(state_clone);
 
-    start(state, &mut terminal, &mut socket)?;
+    handle_app_state(state, &mut terminal, &mut socket)?;
 
     disable_raw_mode()?;
     execute!(
@@ -78,7 +78,7 @@ fn main() -> Result<(), io::Error> {
 }
 
 /// Main function for start app
-fn start(
+fn handle_app_state(
     state: Arc<RwLock<ProgramState<'_>>>,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     socket: &mut Socket,
@@ -146,46 +146,54 @@ fn start(
                 })?;
             }
             AppState::Monitoring => {
-                info!("Hello from monitoring");
-                let wifi_interface = socket.get_interfaces_info().unwrap();
-                if wifi_interface.len() == 1 {
-                    state.write().unwrap().change_state(AppState::Error {
-                        h: "wifi interface error",
-                        d: "wifi interface is not existed",
-                    });
-                    continue;
-                }
-                debug!("initialization wifi_interface");
-                let widget = match create_device(&wifi_interface, socket, rhide_info) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        state.write().unwrap().change_state(e);
-                        continue;
-                    }
-                };
-                let hide_text = if rhide_info {
-                    "For show mac address press 'h'"
-                } else {
-                    "For hide mac address press 'h'"
-                };
-                terminal.draw(|f| {
-                    let chunks = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints(
-                            [Constraint::Percentage(80), Constraint::Percentage(20)].as_ref(),
-                        )
-                        .split(f.size());
-
-                    let hide_paragraph = Paragraph::new(hide_text)
-                        .block(Block::default().title("hint").borders(Borders::ALL));
-
-                    f.render_widget(widget, chunks[0]);
-                    f.render_widget(hide_paragraph, chunks[1]);
-                })?;
+                monitoring_state(state.clone(), terminal, socket, rhide_info)?;
             }
         }
         sleep(Duration::from_millis(100));
     }
+    Ok(())
+}
+
+fn monitoring_state(
+    state: Arc<RwLock<ProgramState<'_>>>,
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    socket: &mut Socket,
+    rhide_info: bool,
+) -> Result<(), io::Error> {
+    info!("Hello from monitoring");
+    let wifi_interface = socket.get_interfaces_info().unwrap();
+    if wifi_interface.len() == 1 {
+        state.write().unwrap().change_state(AppState::Error {
+            h: "wifi interface error",
+            d: "wifi interface is not existed",
+        });
+        return Ok(());
+    }
+    debug!("initialization wifi_interface");
+    let widget = match create_device(&wifi_interface, socket, rhide_info) {
+        Ok(t) => t,
+        Err(e) => {
+            state.write().unwrap().change_state(e);
+            return Ok(());
+        }
+    };
+    let hide_text = if rhide_info {
+        "For show mac address press 'h'"
+    } else {
+        "For hide mac address press 'h'"
+    };
+    terminal.draw(|f| {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+            .split(f.size());
+
+        let hide_paragraph =
+            Paragraph::new(hide_text).block(Block::default().title("hint").borders(Borders::ALL));
+
+        f.render_widget(widget, chunks[0]);
+        f.render_widget(hide_paragraph, chunks[1]);
+    })?;
     Ok(())
 }
 
@@ -211,7 +219,7 @@ fn open_input_thread(state_clone: Arc<RwLock<ProgramState<'static>>>) {
                 break;
             }
 
-            if let Some(key) = event::read().unwrap().as_key_press_event() {
+            if let Some(key) = &event::read().unwrap().as_key_press_event() {
                 let mut wstate = state_clone.write().unwrap();
                 info!("{}", key.code);
                 if key.code == KeyCode::Esc {
