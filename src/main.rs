@@ -149,7 +149,7 @@ fn handle_app_state(
                 monitoring_state(state.clone(), terminal, socket, rhide_info)?;
             }
         }
-        sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(1000 / 30));
     }
     Ok(())
 }
